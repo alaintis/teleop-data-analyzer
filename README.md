@@ -9,7 +9,7 @@ cameras + metric plots + an embedded MuJoCo G1 replay), the batch **metric
 plotting CLI** (`teleop_data_analyzer_plotting.py`), and the standalone
 **G1 action viewer** (`view_g1_action.py`).
 
-![Tele-op Data Analyzer review GUI — three camera feeds with a synced MuJoCo G1 replay](assets/teleop_data_analyzer.png)
+![Tele-op Data Analyzer review GUI — three camera feeds with a synced MuJoCo G1 replay](assets/multiviewer.png)
 
 ---
 
