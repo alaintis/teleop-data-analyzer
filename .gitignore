@@ -1,0 +1,12 @@
+# Python virtual environment
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Downloaded robot models (fetch via scripts/fetch_g1_model.sh)
+models/

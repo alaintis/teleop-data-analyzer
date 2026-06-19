@@ -1,0 +1,9 @@
+# Tele-op Data Analyzer dependencies (see plan.md §9.8)
+numpy
+pandas
+pyarrow
+matplotlib
+PySide6
+opencv-python-headless
+mujoco
+huggingface_hub
