@@ -352,6 +352,7 @@ class SelectorWindow(QtWidgets.QMainWindow):
         sim_base: str = "upright",
         quat_order: str = "wxyz",
         enable_sim: bool = True,
+        enable_metrics: bool = True,
     ):
         super().__init__()
         self.dataset = dataset
@@ -362,6 +363,8 @@ class SelectorWindow(QtWidgets.QMainWindow):
         self.frame_pos = 0
         self.entropy_window = 16
         self.entropy_bins = 16
+        self.enable_metrics = enable_metrics
+        self._enable_sim = enable_sim  # original flag, for layout decisions
 
         self.decisions_path = dataset.root / "decisions.json"
         self.decisions = self._load_decisions()
@@ -415,18 +418,20 @@ class SelectorWindow(QtWidgets.QMainWindow):
             row.addWidget(p, 1)
         outer.addLayout(row, 1)
 
-        # Bottom row: [ metric plots | (reserved) | MuJoCo sim ]. The plots and
-        # sim are synced to the camera playhead; the middle cell is reserved.
-        bottom = QtWidgets.QHBoxLayout()
-        self.pane_plots = MetricPlotsPane("metric plots")
-        self.pane_info = RenderPane("info / controls")
-        self.pane_info.set_message("info / controls\n(coming soon)")
-        self.pane_sim = RenderPane("MuJoCo G1 (action vs state)")
-        if self.sim_error:
-            self.pane_sim.set_message(self.sim_error)
-        for p in (self.pane_plots, self.pane_info, self.pane_sim):
-            bottom.addWidget(p, 1)
-        outer.addLayout(bottom, 1)
+        # Bottom row: [ metric plots | (reserved) | MuJoCo sim ].
+        # Omitted entirely in cameras-only mode (both disabled).
+        self.pane_plots = self.pane_info = self.pane_sim = None
+        if self.enable_metrics or self._enable_sim:
+            bottom = QtWidgets.QHBoxLayout()
+            self.pane_plots = MetricPlotsPane("metric plots")
+            self.pane_info = RenderPane("info / controls")
+            self.pane_info.set_message("info / controls\n(coming soon)")
+            self.pane_sim = RenderPane("MuJoCo G1 (action vs state)")
+            if self.sim_error:
+                self.pane_sim.set_message(self.sim_error)
+            for p in (self.pane_plots, self.pane_info, self.pane_sim):
+                bottom.addWidget(p, 1)
+            outer.addLayout(bottom, 1)
 
         self.status = QtWidgets.QLabel()
         self.status.setStyleSheet("color: #ccc; padding: 4px;")
@@ -497,7 +502,8 @@ class SelectorWindow(QtWidgets.QMainWindow):
         # Per-sample swap is remembered if previously toggled.
         self.swap = bool(self.decisions.get(ep.name, {}).get("swap", False))
         self.frame_pos = 0
-        self._load_metrics(ep)
+        if self.enable_metrics:
+            self._load_metrics(ep)
         self._load_sim(ep)
         self.episode_badge.setText(f"#{ep.index}")
         self._position_badge()
@@ -551,12 +557,13 @@ class SelectorWindow(QtWidgets.QMainWindow):
         self.pane_right.set_frame(right_src.frame if right_src else None)
         self.pane_left.set_title("right wrist (swapped)" if self.swap else "left wrist")
         self.pane_right.set_title("left wrist (swapped)" if self.swap else "right wrist")
-        self.pane_plots.update_playhead(self.frame_pos)
+        if self.pane_plots is not None:
+            self.pane_plots.update_playhead(self.frame_pos)
         self._render_sim()
 
     def _render_sim(self):
         """Render the MuJoCo G1 at the current frame, kept in sync with video."""
-        if self.sim is None or not self.sim_loaded:
+        if self.sim is None or not self.sim_loaded or self.pane_sim is None:
             return
         try:
             rgb = self.sim.render(self.frame_pos)
@@ -686,7 +693,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-sim",
         action="store_true",
-        help="Run the camera viewer only, without the MuJoCo G1 replay pane.",
+        help="Run without the MuJoCo G1 replay pane (metrics still shown).",
+    )
+    parser.add_argument(
+        "--cameras-only",
+        action="store_true",
+        help="Show only the three camera feeds; skip metrics and MuJoCo entirely.",
     )
     args = parser.parse_args(argv)
 
@@ -697,7 +709,8 @@ def main(argv: list[str] | None = None) -> int:
         dataset,
         sim_base=args.sim_base,
         quat_order=args.quat_order,
-        enable_sim=not args.no_sim,
+        enable_sim=not args.no_sim and not args.cameras_only,
+        enable_metrics=not args.cameras_only,
     )
     win.show()
     return app.exec()

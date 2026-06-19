@@ -30,6 +30,10 @@ python -m teleop_data_analyzer.teleop_data_selector_gui \
 python -m teleop_data_analyzer.teleop_data_selector_gui \
     --dataset-root data/red_cube_cardbox_all_cleaned_01 --no-sim
 
+# Camera feeds only — no metrics, no MuJoCo (fastest, stutter-free; no parquet load)
+python -m teleop_data_analyzer.teleop_data_selector_gui \
+    --dataset-root data/red_cube_cardbox_all_cleaned_01 --cameras-only
+
 # Batch metric plots across all episodes
 python -m teleop_data_analyzer.teleop_data_analyzer_plotting \
     --dataset-root data/red_cube_cardbox_all_cleaned_01

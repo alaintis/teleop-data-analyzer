@@ -41,7 +41,12 @@ python -m teleop_data_analyzer.teleop_data_selector_gui \
     --dataset-root data/red_cube_cardbox_all_cleaned_01
 
 # Camera viewer + metric plots only (no MuJoCo pane)
-python -m teleop_data_analyzer.teleop_data_selector_gui --no-sim
+python -m teleop_data_analyzer.teleop_data_selector_gui \
+    --dataset-root data/red_cube_cardbox_all_cleaned_01 --no-sim
+
+# Camera feeds only — no metrics, no MuJoCo (fastest, stutter-free)
+python -m teleop_data_analyzer.teleop_data_selector_gui \
+    --dataset-root data/red_cube_cardbox_all_cleaned_01 --cameras-only
 
 # Metric overview across all episodes
 python -m teleop_data_analyzer.teleop_data_analyzer_plotting \
@@ -77,7 +82,8 @@ python -m teleop_data_analyzer.teleop_data_selector_gui \
 | Flag | Default | Meaning |
 |---|---|---|
 | `--dataset-root PATH` | a local sample path | LeRobot dataset root to review |
-| `--no-sim` | off | run the camera viewer only, without the MuJoCo pane |
+| `--no-sim` | off | disable the MuJoCo pane (metric plots still shown) |
+| `--cameras-only` | off | show only the three camera feeds; skip metrics and MuJoCo entirely (fastest, no parquet load) |
 | `--sim-base {upright,orientation}` | `upright` | pelvis pinned upright, or apply recorded base orientation (relative to frame 0) in the sim pane |
 | `--quat-order {wxyz,xyzw}` | `wxyz` | quaternion order of `observation.root_orientation` (use `xyzw` if the lean looks wrong) |
 
