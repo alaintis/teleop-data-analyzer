@@ -1,7 +1,13 @@
-"""Tele-op data selector GUI — Phase 2, part 1: the three-camera viewer.
+"""Tele-op data selector GUI — three-camera viewer + MuJoCo G1 replay.
 
-Streams the three per-episode camera feeds (left wrist | ego/main | right wrist)
-side by side, synchronized, and provides the review keyboard shortcuts:
+Top row streams the three per-episode camera feeds (left wrist | ego/main |
+right wrist). The bottom-right pane shows the MuJoCo G1 kinematic replay
+(commanded action vs. measured state) rendered offscreen and kept in sync with
+the camera playhead — it follows the same episode and frame, so navigating to
+another sample re-loads its motion automatically. (The two remaining bottom
+cells are placeholders for the metric plots / info pane.)
+
+The feeds are synchronized and provide the review keyboard shortcuts:
 
     space   play / pause
     < / >   step one frame (when paused)
@@ -44,6 +50,13 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from teleop_data_analyzer.dataset import Dataset, Episode
+
+# MuJoCo is optional: if it (or the G1 model) is unavailable the GUI still runs
+# as a pure camera viewer and the sim pane shows why it's empty.
+try:
+    from teleop_data_analyzer.sim.replay import G1Replay
+except Exception:  # pragma: no cover - import-time env/dep issues
+    G1Replay = None
 
 
 class VideoSource:
@@ -132,8 +145,40 @@ class CameraPane(QtWidgets.QWidget):
         self._rescale()
 
 
+class RenderPane(CameraPane):
+    """A titled pane that displays an RGB ndarray (e.g. the MuJoCo render).
+
+    Reuses :class:`CameraPane`'s aspect-preserving scaling but, unlike it,
+    takes already-RGB frames and can fall back to a centered status message
+    (e.g. when the sim is unavailable).
+    """
+
+    def set_rgb(self, rgb):
+        if rgb is None:
+            self._pixmap = None
+            self.view.clear()
+            return
+        h, w = rgb.shape[:2]
+        # QImage needs contiguous memory; render output already is, but copy to
+        # be safe and to detach from the renderer's reused buffer.
+        img = QtGui.QImage(rgb.tobytes(), w, h, 3 * w, QtGui.QImage.Format_RGB888)
+        self._pixmap = QtGui.QPixmap.fromImage(img)
+        self._rescale()
+
+    def set_message(self, text: str):
+        self._pixmap = None
+        self.view.setText(text)
+        self.view.setStyleSheet("background: #111; color: #888; padding: 8px;")
+
+
 class SelectorWindow(QtWidgets.QMainWindow):
-    def __init__(self, dataset: Dataset):
+    def __init__(
+        self,
+        dataset: Dataset,
+        sim_base: str = "upright",
+        quat_order: str = "wxyz",
+        enable_sim: bool = True,
+    ):
         super().__init__()
         self.dataset = dataset
         self.episodes: list[Episode] = dataset.episodes
@@ -149,6 +194,24 @@ class SelectorWindow(QtWidgets.QMainWindow):
         self.ego_src: VideoSource | None = None
         self.right_src: VideoSource | None = None
 
+        # MuJoCo replay that follows the selected episode/frame (Phase 3).
+        self.sim = None
+        self.sim_loaded = False
+        self.sim_error: str | None = None
+        if not enable_sim:
+            self.sim_error = "sim disabled (--no-sim)"
+        elif G1Replay is None:
+            self.sim_error = "MuJoCo unavailable\n(install `mujoco`)"
+        else:
+            try:
+                self.sim = G1Replay(
+                    dataset.root,
+                    apply_orientation=(sim_base == "orientation"),
+                    quat_order=quat_order,
+                )
+            except Exception as exc:  # GL context / model missing, etc.
+                self.sim_error = f"Sim disabled:\n{exc}"
+
         self._build_ui()
 
         self.timer = QtCore.QTimer(self)
@@ -161,12 +224,13 @@ class SelectorWindow(QtWidgets.QMainWindow):
 
     # ---- UI ----------------------------------------------------------------
     def _build_ui(self):
-        self.setWindowTitle("Tele-op Data Selector — camera viewer")
-        self.resize(1280, 560)
+        self.setWindowTitle("Tele-op Data Selector — camera viewer + G1 sim")
+        self.resize(1280, 960)
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         outer = QtWidgets.QVBoxLayout(central)
 
+        # Top row: the three camera feeds.
         row = QtWidgets.QHBoxLayout()
         self.pane_left = CameraPane("left wrist")
         self.pane_ego = CameraPane("ego (main)")
@@ -174,6 +238,21 @@ class SelectorWindow(QtWidgets.QMainWindow):
         for p in (self.pane_left, self.pane_ego, self.pane_right):
             row.addWidget(p, 1)
         outer.addLayout(row, 1)
+
+        # Bottom row: [ metric plots | (reserved) | MuJoCo sim ]. The first two
+        # cells are placeholders until the metric/info panes land; the third is
+        # the MuJoCo G1 replay, synced to the camera playhead.
+        bottom = QtWidgets.QHBoxLayout()
+        self.pane_plots = RenderPane("metric plots")
+        self.pane_plots.set_message("metric plots\n(coming soon)")
+        self.pane_info = RenderPane("info / controls")
+        self.pane_info.set_message("info / controls\n(coming soon)")
+        self.pane_sim = RenderPane("MuJoCo G1 (action vs state)")
+        if self.sim_error:
+            self.pane_sim.set_message(self.sim_error)
+        for p in (self.pane_plots, self.pane_info, self.pane_sim):
+            bottom.addWidget(p, 1)
+        outer.addLayout(bottom, 1)
 
         self.status = QtWidgets.QLabel()
         self.status.setStyleSheet("color: #ccc; padding: 4px;")
@@ -244,10 +323,24 @@ class SelectorWindow(QtWidgets.QMainWindow):
         # Per-sample swap is remembered if previously toggled.
         self.swap = bool(self.decisions.get(ep.name, {}).get("swap", False))
         self.frame_pos = 0
+        self._load_sim(ep)
         self.episode_badge.setText(f"#{ep.index}")
         self._position_badge()
         self._render()
         self._update_status()
+
+    def _load_sim(self, ep: Episode):
+        """Point the MuJoCo replay at the same episode the cameras show."""
+        if self.sim is None:
+            return
+        try:
+            self.sim.load_episode(ep.index)
+        except Exception as exc:
+            # Don't kill the camera viewer if one episode's motion is unreadable.
+            self.pane_sim.set_message(f"No sim data for\n{ep.name}:\n{exc}")
+            self.sim_loaded = False
+        else:
+            self.sim_loaded = True
 
     def _wrist_panes(self):
         """Return (left_source, right_source) honoring the swap toggle."""
@@ -262,6 +355,19 @@ class SelectorWindow(QtWidgets.QMainWindow):
         self.pane_right.set_frame(right_src.frame if right_src else None)
         self.pane_left.set_title("right wrist (swapped)" if self.swap else "left wrist")
         self.pane_right.set_title("left wrist (swapped)" if self.swap else "right wrist")
+        self._render_sim()
+
+    def _render_sim(self):
+        """Render the MuJoCo G1 at the current frame, kept in sync with video."""
+        if self.sim is None or not self.sim_loaded:
+            return
+        try:
+            rgb = self.sim.render(self.frame_pos)
+        except Exception as exc:  # pragma: no cover - render-time GL issues
+            self.pane_sim.set_message(f"Sim render error:\n{exc}")
+            self.sim_loaded = False
+            return
+        self.pane_sim.set_rgb(rgb)
 
     def _update_status(self):
         ep = self.episodes[self.idx]
@@ -355,6 +461,8 @@ class SelectorWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         self.timer.stop()
         self._release_sources()
+        if self.sim is not None:
+            self.sim.close()
         super().closeEvent(event)
 
 
@@ -365,12 +473,35 @@ def main(argv: list[str] | None = None) -> int:
         default="/home/alain/Documents/red_cube_cardbox_all_cleaned_01",
         help="Path to the LeRobot dataset root.",
     )
+    parser.add_argument(
+        "--sim-base",
+        choices=["upright", "orientation"],
+        default="upright",
+        help="MuJoCo pane: pin the pelvis upright (default) or apply the "
+        "recorded base orientation (relative to frame 0).",
+    )
+    parser.add_argument(
+        "--quat-order",
+        choices=["wxyz", "xyzw"],
+        default="wxyz",
+        help="Quaternion order of observation.root_orientation in the dataset.",
+    )
+    parser.add_argument(
+        "--no-sim",
+        action="store_true",
+        help="Run the camera viewer only, without the MuJoCo G1 replay pane.",
+    )
     args = parser.parse_args(argv)
 
     dataset = Dataset(args.dataset_root)
 
     app = QtWidgets.QApplication(sys.argv[:1])
-    win = SelectorWindow(dataset)
+    win = SelectorWindow(
+        dataset,
+        sim_base=args.sim_base,
+        quat_order=args.quat_order,
+        enable_sim=not args.no_sim,
+    )
     win.show()
     return app.exec()
 

@@ -34,35 +34,18 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from teleop_data_analyzer.sim.action_data import load_episode
     from teleop_data_analyzer.sim.g1_scene import G1Scene
+    from teleop_data_analyzer.sim.replay import relative_quat as _relative_quat
+    from teleop_data_analyzer.sim.replay import to_wxyz as _to_wxyz
 else:
     from .sim.action_data import load_episode
     from .sim.g1_scene import G1Scene
+    from .sim.replay import relative_quat as _relative_quat
+    from .sim.replay import to_wxyz as _to_wxyz
 
 # GLFW key codes delivered by mujoco.viewer.
 _KEY_SPACE = 32
 _KEY_RIGHT, _KEY_LEFT, _KEY_UP, _KEY_DOWN = 262, 263, 265, 264
 _KEY_O, _KEY_R = ord("O"), ord("R")
-
-
-def _to_wxyz(quat: np.ndarray, order: str) -> np.ndarray:
-    """Return a wxyz quaternion (MuJoCo order) from the dataset's stored order."""
-    quat = np.asarray(quat, dtype=float)
-    if order == "xyzw":
-        return np.array([quat[3], quat[0], quat[1], quat[2]])
-    return quat  # already wxyz
-
-
-def _relative_quat(q_t: np.ndarray, q0: np.ndarray) -> np.ndarray:
-    """Orientation of frame t relative to frame 0, so playback starts upright.
-
-    Avoids guessing the dataset's absolute world frame: we only show how the
-    base orientation *changes* over the episode.
-    """
-    neg0 = np.zeros(4)
-    mujoco.mju_negQuat(neg0, q0)        # conjugate of the first-frame quaternion
-    rel = np.zeros(4)
-    mujoco.mju_mulQuat(rel, q_t, neg0)
-    return rel
 
 
 def main() -> None:

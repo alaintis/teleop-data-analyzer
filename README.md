@@ -4,8 +4,80 @@ Tools to triage and analyze Unitree **G1** teleoperation demonstrations collecte
 with GR00T **Sonic** whole-body control. See [`plan.md`](plan.md) for the full
 design.
 
-This README covers the **G1 action viewer** (the MuJoCo replay). For the
-review GUI and batch plotting see `plan.md`.
+This README covers the two interactive tools — the **review GUI**
+(`teleop_data_selector_gui.py`: three cameras + an embedded MuJoCo G1 replay)
+and the standalone **G1 action viewer** (`view_g1_action.py`).
+
+---
+
+## Quick start
+
+**Requirements:** Python ≥ 3.10, a display (the tools open windows), and — for
+the MuJoCo panes — working OpenGL. Python deps are pinned in
+[`requirements.txt`](requirements.txt): `numpy`, `pandas`, `pyarrow`,
+`matplotlib`, `PySide6`, `opencv-python-headless`, `mujoco`, `huggingface_hub`.
+
+```bash
+# 1. Create the .venv, install requirements.txt, and download the sample dataset
+./install.sh
+#    Variants:  SKIP_DATASET=1 ./install.sh   (deps only)
+#               DATA_DIR=/path  ./install.sh   (dataset elsewhere)
+
+# 2. Download the G1 MuJoCo model + meshes (~38 MB) into models/
+./scripts/fetch_g1_model.sh
+
+# 3. Activate the environment
+source .venv/bin/activate
+```
+
+Then run either tool (commands and options below):
+
+```bash
+# Review GUI — 3 cameras + synced MuJoCo G1 replay
+python -m teleop_data_analyzer.teleop_data_selector_gui \
+    --dataset-root data/red_cube_cardbox_all_cleaned_01
+
+# Camera viewer only (no MuJoCo pane)
+python -m teleop_data_analyzer.teleop_data_selector_gui --no-sim
+
+# Standalone MuJoCo action viewer (one episode, interactive 3D)
+python -m teleop_data_analyzer.view_g1_action \
+    --dataset-root data/red_cube_cardbox_all_cleaned_01 --episode 0
+#with --hide-ui to hide MuJoCo's side panels for a clean robots-only window
+```
+
+> The model and dataset are git-ignored; steps 1–2 fetch them. If `mujoco` or
+> the G1 model is missing, the review GUI still runs as a pure camera viewer and
+> the MuJoCo pane shows why it's empty.
+
+---
+
+## Review GUI — `teleop_data_selector_gui.py`
+
+The triage tool. Top row shows the three per-episode camera feeds
+(left wrist | ego/main | right wrist); the bottom-right pane is the MuJoCo G1
+replay, rendered offscreen and **kept in sync with the camera playhead** — it
+follows the same episode and frame, so moving to another sample reloads its
+motion automatically. (The other two bottom cells are placeholders for the
+upcoming metric-plot / info panes.)
+
+```bash
+python -m teleop_data_analyzer.teleop_data_selector_gui \
+    --dataset-root data/red_cube_cardbox_all_cleaned_01
+```
+
+**Options**
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dataset-root PATH` | a local sample path | LeRobot dataset root to review |
+| `--no-sim` | off | run the camera viewer only, without the MuJoCo pane |
+| `--sim-base {upright,orientation}` | `upright` | pelvis pinned upright, or apply recorded base orientation (relative to frame 0) in the sim pane |
+| `--quat-order {wxyz,xyzw}` | `wxyz` | quaternion order of `observation.root_orientation` (use `xyzw` if the lean looks wrong) |
+
+**Keys** (focus the window): `space` play/pause · `←`/`→` step frame ·
+`s` swap wrists · `g` good · `d` discard · `n`/`p` next/prev episode · `q` quit.
+Decisions are saved non-destructively to `decisions.json` in the dataset root.
 
 ---
 
@@ -26,12 +98,9 @@ realized motion diverge.
 
 ### Setup
 
-```bash
-./install.sh                       # venv + deps + dataset download
-./scripts/fetch_g1_model.sh        # download the G1 model + meshes (~38 MB)
-```
-
-`fetch_g1_model.sh` pulls `unitree_g1/g1_with_hands.xml` from
+See [Quick start](#quick-start) above (`./install.sh` +
+`./scripts/fetch_g1_model.sh`). `fetch_g1_model.sh` pulls
+`unitree_g1/g1_with_hands.xml` from
 [mujoco_menagerie](https://github.com/google-deepmind/mujoco_menagerie) into
 `models/`. That model has the **exact same 43 joint names** as the dataset, so
 the replay maps joints purely by name (no hand-built index table).
@@ -44,8 +113,16 @@ python -m teleop_data_analyzer.view_g1_action \
     --episode 0
 ```
 
-Options: `--episode N`, `--speed X` (initial playback speed),
-`--base {upright,orientation}`, `--quat-order {wxyz,xyzw}`.
+**Options**
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dataset-root PATH` | (required) | LeRobot dataset root |
+| `--episode N` | `0` | episode index to replay |
+| `--speed X` | `1.0` | initial playback speed |
+| `--base {upright,orientation}` | `upright` | pin pelvis upright, or apply recorded base orientation |
+| `--quat-order {wxyz,xyzw}` | `wxyz` | quaternion order of `observation.root_orientation` |
+| `--hide-ui` | off | hide MuJoCo's side panels for a clean robots-only window |
 
 ### Controls (focus the MuJoCo window)
 
@@ -128,12 +205,14 @@ assumed `wxyz`; use `--quat-order xyzw` if the lean looks wrong.
 
 ```
 teleop_data_analyzer/
-├── view_g1_action.py        # the interactive viewer CLI (this tool)
+├── teleop_data_selector_gui.py  # review GUI: 3 cameras + synced MuJoCo pane
+├── view_g1_action.py        # standalone interactive MuJoCo viewer CLI
+├── dataset.py               # (GUI) video-path loader
 ├── sim/
 │   ├── g1_scene.py          # builds the dual-G1 MuJoCo scene; name-based posing
-│   └── action_data.py       # reads action.wbc / observation.state from parquet
-├── dataset.py               # (GUI) video-path loader
-└── teleop_data_selector_gui.py
+│   ├── action_data.py       # reads action.wbc / observation.state from parquet
+│   └── replay.py            # offscreen renderer that feeds the GUI's sim pane
 models/unitree_g1/           # G1 model + meshes (downloaded, git-ignored)
 scripts/fetch_g1_model.sh    # downloads the model
+install.sh                   # venv + deps + sample-dataset download
 ```
