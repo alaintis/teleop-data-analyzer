@@ -22,6 +22,8 @@ action does with the robot*. Two robots are shown side by side:
 Comparing them shows the controller's tracking — where the action and the
 realized motion diverge.
 
+![G1 dual-robot MuJoCo replay](assets/mujoco_viewer.png)
+
 ### Setup
 
 ```bash
@@ -58,8 +60,25 @@ Options: `--episode N`, `--speed X` (initial playback speed),
 
 The MuJoCo side panels are shown by default (use the right panel's camera
 controls / mouse to set the view). Pass `--hide-ui` for a clean robots-only
-window. To make a tuned view the default, copy the camera numbers from the
-panel into `default_camera` in `sim/g1_scene.py`.
+window.
+
+![MuJoCo camera controls panel](assets/camera_viewer.png)
+
+### Default camera
+
+The viewer opens with this free-camera pose, set in `default_camera` /
+`vis.global_.fovy` in `sim/g1_scene.py`:
+
+| Setting | Value |
+|---|---|
+| field of view (`fovy`) | 42° |
+| look-at | `(0, 0, 0.8)` |
+| azimuth | 140° |
+| elevation | −8° |
+| distance | 3.0 m |
+
+To retune: mouse-orbit to the view you want, read the values off the right
+panel, and edit `default_camera` (and `fovy`) in `sim/g1_scene.py`.
 
 ---
 
