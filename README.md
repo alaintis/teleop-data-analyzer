@@ -8,6 +8,8 @@ This README covers the two interactive tools — the **review GUI**
 (`teleop_data_selector_gui.py`: three cameras + an embedded MuJoCo G1 replay)
 and the standalone **G1 action viewer** (`view_g1_action.py`).
 
+![Tele-op Data Analyzer review GUI — three camera feeds with a synced MuJoCo G1 replay](assets/teleop_data_analyzer.png)
+
 ---
 
 ## Quick start
