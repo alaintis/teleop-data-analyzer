@@ -4,9 +4,10 @@ Tools to triage and analyze Unitree **G1** teleoperation demonstrations collecte
 with GR00T **Sonic** whole-body control. See [`plan.md`](plan.md) for the full
 design.
 
-This README covers the two interactive tools — the **review GUI**
-(`teleop_data_selector_gui.py`: three cameras + an embedded MuJoCo G1 replay)
-and the standalone **G1 action viewer** (`view_g1_action.py`).
+This README covers the **review GUI** (`teleop_data_selector_gui.py`: three
+cameras + metric plots + an embedded MuJoCo G1 replay), the batch **metric
+plotting CLI** (`teleop_data_analyzer_plotting.py`), and the standalone
+**G1 action viewer** (`view_g1_action.py`).
 
 ![Tele-op Data Analyzer review GUI — three camera feeds with a synced MuJoCo G1 replay](assets/teleop_data_analyzer.png)
 
@@ -32,15 +33,19 @@ the MuJoCo panes — working OpenGL. Python deps are pinned in
 source .venv/bin/activate
 ```
 
-Then run either tool (commands and options below):
+Then run the tools (commands and options below):
 
 ```bash
-# Review GUI — 3 cameras + synced MuJoCo G1 replay
+# Review GUI — 3 cameras + metric plots + synced MuJoCo G1 replay
 python -m teleop_data_analyzer.teleop_data_selector_gui \
     --dataset-root data/red_cube_cardbox_all_cleaned_01
 
-# Camera viewer only (no MuJoCo pane)
+# Camera viewer + metric plots only (no MuJoCo pane)
 python -m teleop_data_analyzer.teleop_data_selector_gui --no-sim
+
+# Metric overview across all episodes
+python -m teleop_data_analyzer.teleop_data_analyzer_plotting \
+    --dataset-root data/red_cube_cardbox_all_cleaned_01
 
 # Standalone MuJoCo action viewer (one episode, interactive 3D)
 python -m teleop_data_analyzer.view_g1_action \
@@ -57,11 +62,10 @@ python -m teleop_data_analyzer.view_g1_action \
 ## Review GUI — `teleop_data_selector_gui.py`
 
 The triage tool. Top row shows the three per-episode camera feeds
-(left wrist | ego/main | right wrist); the bottom-right pane is the MuJoCo G1
-replay, rendered offscreen and **kept in sync with the camera playhead** — it
-follows the same episode and frame, so moving to another sample reloads its
-motion automatically. (The other two bottom cells are placeholders for the
-upcoming metric-plot / info panes.)
+(left wrist | ego/main | right wrist); the bottom-left pane shows four
+quality metrics with a synced playhead; the bottom-right pane is the MuJoCo
+G1 replay, rendered offscreen and **kept in sync with the camera playhead**.
+The bottom-middle info / controls pane is still reserved.
 
 ```bash
 python -m teleop_data_analyzer.teleop_data_selector_gui \
@@ -80,6 +84,25 @@ python -m teleop_data_analyzer.teleop_data_selector_gui \
 **Keys** (focus the window): `space` play/pause · `←`/`→` step frame ·
 `s` swap wrists · `g` good · `d` discard · `n`/`p` next/prev episode · `q` quit.
 Decisions are saved non-destructively to `decisions.json` in the dataset root.
+
+---
+
+## Metric plotting CLI — `teleop_data_analyzer_plotting.py`
+
+Computes the shared metrics from `metrics.py` without launching the Qt GUI. In
+default mode it iterates every episode and opens two figures: a 2x2 overlay with
+thin per-episode lines plus mean +/- std bands, and a per-episode summary view
+for outlier spotting.
+
+```bash
+python -m teleop_data_analyzer.teleop_data_analyzer_plotting \
+    --dataset-root data/red_cube_cardbox_all_cleaned_01
+```
+
+Use `--episode N` for the same 2x2 per-episode layout as the GUI with an
+interactive playhead slider. Use `--save PATH` to write PNG figure(s) instead of
+showing windows. Entropy parameters are configurable with `--entropy-window` and
+`--entropy-bins`.
 
 ---
 
@@ -207,8 +230,9 @@ assumed `wxyz`; use `--quat-order xyzw` if the lean looks wrong.
 
 ```
 teleop_data_analyzer/
-├── teleop_data_selector_gui.py  # review GUI: 3 cameras + synced MuJoCo pane
+├── teleop_data_selector_gui.py  # review GUI: 3 cameras + metric plots + synced MuJoCo pane
 ├── view_g1_action.py        # standalone interactive MuJoCo viewer CLI
+├── teleop_data_analyzer_plotting.py  # batch/single-episode metric plots
 ├── dataset.py               # (GUI) video-path loader
 ├── sim/
 │   ├── g1_scene.py          # builds the dual-G1 MuJoCo scene; name-based posing

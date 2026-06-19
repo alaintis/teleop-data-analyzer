@@ -1,0 +1,85 @@
+STATISTICS PANE IMPLEMENTATION PLAN
+====================================
+
+CURRENT STATE
+-------------
+- GUI has 3 bottom panes:
+    pane_plots  (bottom-left,  placeholder "coming soon")
+    pane_info   (bottom-middle, placeholder "coming soon")
+    pane_sim    (bottom-right,  working MuJoCo G1 replay)
+- No metrics.py exists yet
+- Real dataset: 43 joint positions (no recorded velocity), fps=50
+    left hand joints:  indices 22-28
+    right hand joints: indices 36-42
+
+WHAT WILL BE BUILT
+------------------
+
+1. teleop_data_analyzer/metrics.py  (new, shared by GUI and plotting script)
+
+   joint_velocity_variance(state, fps)
+       Finite-difference observation.state positions -> velocity
+       Per-frame variance across all 43 joints -> 1-D array (T,)
+
+   jerk(state, fps)
+       Triple finite-difference of state positions -> jerk
+       L2 norm across joints per frame -> 1-D array (T,)
+
+   gripper_aperture(state, joint_names)
+       Mean position of left-hand joints (22-28) over time -> 1-D array (T,)
+       Mean position of right-hand joints (36-42) over time -> 1-D array (T,)
+       Returns (left, right) tuple
+
+   action_entropy(action, window=16, bins=16)
+       Sliding-window Shannon entropy of action.wbc deltas
+       Window W=16 frames, 16 histogram bins -> 1-D array (T,)
+
+   All functions accept numpy arrays and return time-aligned 1-D arrays.
+
+
+2. teleop_data_selector_gui.py  (modifications)
+
+   Replace pane_plots placeholder (bottom-left) with a live matplotlib
+   FigureCanvas containing a 2x2 subplot grid:
+       top-left:     joint velocity variance
+       top-right:    jerk
+       bottom-left:  gripper aperture (left=blue, right=orange)
+       bottom-right: action entropy
+
+   Metrics computed once per episode load via action_data.load_episode
+   (same loader used by the sim pane, works even with --no-sim).
+
+   Synced vertical playhead line updated each timer tick via matplotlib
+   blitting to keep it cheap at 50 fps.
+
+   pane_info (bottom-middle) stays as placeholder, no changes.
+
+
+3. teleop_data_analyzer/teleop_data_analyzer_plotting.py  (new standalone CLI)
+
+   Default mode (no --episode):
+       Iterate all episodes, compute all 4 metrics.
+       Figure 1: 4-panel overlay, all episodes as thin lines + mean +- std band.
+       Figure 2: per-episode summary bar/scatter (mean jerk, peak entropy, etc.)
+       for outlier spotting.
+
+   --episode N:
+       Single-episode window: same 2x2 layout as the GUI pane, plus an
+       interactive slider to scrub the playhead.
+
+   --save PATH:
+       Save figure(s) to file (PNG) instead of showing interactively.
+
+   --dataset-root PATH:
+       LeRobot dataset root (required).
+
+   --entropy-window W  (default 16)
+   --entropy-bins B    (default 16)
+
+
+LAYOUT NOTES
+------------
+- The MuJoCo pane does NOT need to be in the middle of the bottom row
+  (plan.md said that but the user confirmed it can stay bottom-right).
+- Bottom row final layout:
+    [ metric plots (2x2) | info/controls placeholder | MuJoCo G1 sim ]

@@ -1,11 +1,12 @@
-"""Tele-op data selector GUI — three-camera viewer + MuJoCo G1 replay.
+"""Tele-op data selector GUI — three-camera viewer + metric plots + G1 replay.
 
 Top row streams the three per-episode camera feeds (left wrist | ego/main |
 right wrist). The bottom-right pane shows the MuJoCo G1 kinematic replay
 (commanded action vs. measured state) rendered offscreen and kept in sync with
 the camera playhead — it follows the same episode and frame, so navigating to
-another sample re-loads its motion automatically. (The two remaining bottom
-cells are placeholders for the metric plots / info pane.)
+another sample re-loads its motion automatically. The bottom-left pane shows
+per-episode quality metrics with a synced playhead; the bottom-middle cell is
+reserved for the info / controls pane.
 
 The feeds are synchronized and provide the review keyboard shortcuts:
 
@@ -40,6 +41,9 @@ if not os.environ.get("QT_QPA_PLATFORM") and os.environ.get("WAYLAND_DISPLAY"):
     os.environ["QT_QPA_PLATFORM"] = "wayland"
 
 import cv2
+import numpy as np
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 from PySide6 import QtCore, QtGui, QtWidgets
 
 # Work whether launched as a module (`python -m ...`) or as a plain script
@@ -47,9 +51,23 @@ from PySide6 import QtCore, QtGui, QtWidgets
 # parent dir isn't on sys.path, so add it before importing the package.
 try:
     from teleop_data_analyzer.dataset import Dataset, Episode
+    from teleop_data_analyzer.metrics import (
+        action_entropy,
+        gripper_aperture,
+        jerk,
+        joint_velocity_variance,
+    )
+    from teleop_data_analyzer.sim.action_data import load_episode as load_motion_episode
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from teleop_data_analyzer.dataset import Dataset, Episode
+    from teleop_data_analyzer.metrics import (
+        action_entropy,
+        gripper_aperture,
+        jerk,
+        joint_velocity_variance,
+    )
+    from teleop_data_analyzer.sim.action_data import load_episode as load_motion_episode
 
 # MuJoCo is optional: if it (or the G1 model) is unavailable the GUI still runs
 # as a pure camera viewer and the sim pane shows why it's empty.
@@ -171,6 +189,162 @@ class RenderPane(CameraPane):
         self.view.setStyleSheet("background: #111; color: #888; padding: 8px;")
 
 
+class MetricPlotsPane(QtWidgets.QWidget):
+    """A 2x2 matplotlib metric pane with cheap playhead updates."""
+
+    def __init__(self, title: str):
+        super().__init__()
+        self.fps = 1.0
+        self.frame_pos = 0
+        self.playheads = []
+        self._background = None
+        self._blit_pending = False
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        self.title_label = QtWidgets.QLabel(title)
+        self.title_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.title_label.setStyleSheet("color: #ddd; font-weight: bold; padding: 2px;")
+
+        self.message = QtWidgets.QLabel()
+        self.message.setAlignment(QtCore.Qt.AlignCenter)
+        self.message.setStyleSheet("background: #111; color: #888; padding: 8px;")
+        self.message.setMinimumSize(160, 120)
+        self.message.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+        )
+
+        self.figure = Figure(figsize=(6, 4), dpi=100)
+        self.figure.patch.set_facecolor("#111")
+        self.canvas = FigureCanvas(self.figure)
+        self.canvas.setStyleSheet("background: #111;")
+        self.canvas.setMinimumSize(160, 120)
+        self.canvas.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+        )
+        self.canvas.mpl_connect("draw_event", self._on_draw)
+
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.message, 1)
+        layout.addWidget(self.canvas, 1)
+        self.set_message("metric plots\n(loading)")
+
+    def set_message(self, text: str):
+        self._background = None
+        self._blit_pending = False
+        self.playheads = []
+        self.message.setText(text)
+        self.message.show()
+        self.canvas.hide()
+
+    def set_metrics(self, metrics: dict[str, np.ndarray], fps: float):
+        self.fps = max(1e-9, float(fps))
+        self.frame_pos = 0
+        self._background = None
+        self._blit_pending = False
+        self.message.hide()
+        self.canvas.show()
+        self.figure.clear()
+        self.figure.patch.set_facecolor("#111")
+        axes = np.asarray(self.figure.subplots(2, 2)).ravel()
+
+        self._plot_series(
+            axes[0],
+            metrics["velocity_variance"],
+            "joint velocity variance",
+            "#4aa3ff",
+        )
+        self._plot_series(axes[1], metrics["jerk"], "jerk", "#ff6b5f")
+        self._plot_grippers(
+            axes[2],
+            metrics["gripper_left"],
+            metrics["gripper_right"],
+        )
+        self._plot_series(axes[3], metrics["action_entropy"], "action entropy", "#d7b84f")
+
+        self.playheads = []
+        for ax in axes:
+            line = ax.axvline(
+                0.0,
+                color="#f4f4f4",
+                linewidth=1.1,
+                alpha=0.95,
+                animated=True,
+            )
+            self.playheads.append(line)
+            self._style_axis(ax)
+
+        self.figure.tight_layout(pad=1.0)
+        self.canvas.draw()
+        self.update_playhead(0)
+
+    def _plot_series(self, ax, values: np.ndarray, title: str, color: str):
+        values = np.asarray(values, dtype=np.float64)
+        x = np.arange(values.shape[0], dtype=np.float64) / self.fps
+        ax.plot(x, values, color=color, linewidth=1.2)
+        ax.set_title(title)
+
+    def _plot_grippers(self, ax, left: np.ndarray, right: np.ndarray):
+        left = np.asarray(left, dtype=np.float64)
+        right = np.asarray(right, dtype=np.float64)
+        x_left = np.arange(left.shape[0], dtype=np.float64) / self.fps
+        x_right = np.arange(right.shape[0], dtype=np.float64) / self.fps
+        ax.plot(x_left, left, color="#4aa3ff", linewidth=1.1, label="left")
+        ax.plot(x_right, right, color="#f59e42", linewidth=1.1, label="right")
+        ax.set_title("gripper aperture")
+        legend = ax.legend(loc="best", fontsize=7, frameon=False)
+        for text in legend.get_texts():
+            text.set_color("#ddd")
+
+    def _style_axis(self, ax):
+        ax.set_facecolor("#151515")
+        ax.tick_params(colors="#aaa", labelsize=7)
+        ax.title.set_color("#eee")
+        ax.title.set_fontsize(9)
+        ax.xaxis.label.set_color("#aaa")
+        ax.yaxis.label.set_color("#aaa")
+        ax.grid(True, color="#333", linewidth=0.5, alpha=0.7)
+        ax.set_xlabel("s", fontsize=7)
+        for spine in ax.spines.values():
+            spine.set_color("#555")
+
+    def update_playhead(self, frame_pos: int):
+        self.frame_pos = max(0, int(frame_pos))
+        if not self.playheads or not self.canvas.isVisible():
+            return
+        if self._background is None:
+            self.canvas.draw_idle()
+            return
+        self._schedule_blit()
+
+    def _on_draw(self, _event):
+        if not self.playheads or not self.canvas.isVisible():
+            return
+        self._background = self.canvas.copy_from_bbox(self.figure.bbox)
+        self._schedule_blit()
+
+    def _schedule_blit(self):
+        if self._blit_pending:
+            return
+        self._blit_pending = True
+        QtCore.QTimer.singleShot(0, self._blit_playheads)
+
+    def _blit_playheads(self):
+        self._blit_pending = False
+        if self._background is None or not self.canvas.isVisible():
+            return
+        x = self.frame_pos / self.fps
+        try:
+            self.canvas.restore_region(self._background)
+            for line in self.playheads:
+                line.set_xdata([x, x])
+                line.axes.draw_artist(line)
+            self.canvas.blit(self.figure.bbox)
+        except Exception:
+            self._background = None
+            self.canvas.draw_idle()
+
+
 class SelectorWindow(QtWidgets.QMainWindow):
     def __init__(
         self,
@@ -186,6 +360,8 @@ class SelectorWindow(QtWidgets.QMainWindow):
         self.swap = False
         self.playing = True
         self.frame_pos = 0
+        self.entropy_window = 16
+        self.entropy_bins = 16
 
         self.decisions_path = dataset.root / "decisions.json"
         self.decisions = self._load_decisions()
@@ -224,7 +400,7 @@ class SelectorWindow(QtWidgets.QMainWindow):
 
     # ---- UI ----------------------------------------------------------------
     def _build_ui(self):
-        self.setWindowTitle("Tele-op Data Selector — camera viewer + G1 sim")
+        self.setWindowTitle("Tele-op Data Selector — camera viewer + metrics + G1 sim")
         self.resize(1280, 960)
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -239,12 +415,10 @@ class SelectorWindow(QtWidgets.QMainWindow):
             row.addWidget(p, 1)
         outer.addLayout(row, 1)
 
-        # Bottom row: [ metric plots | (reserved) | MuJoCo sim ]. The first two
-        # cells are placeholders until the metric/info panes land; the third is
-        # the MuJoCo G1 replay, synced to the camera playhead.
+        # Bottom row: [ metric plots | (reserved) | MuJoCo sim ]. The plots and
+        # sim are synced to the camera playhead; the middle cell is reserved.
         bottom = QtWidgets.QHBoxLayout()
-        self.pane_plots = RenderPane("metric plots")
-        self.pane_plots.set_message("metric plots\n(coming soon)")
+        self.pane_plots = MetricPlotsPane("metric plots")
         self.pane_info = RenderPane("info / controls")
         self.pane_info.set_message("info / controls\n(coming soon)")
         self.pane_sim = RenderPane("MuJoCo G1 (action vs state)")
@@ -323,11 +497,33 @@ class SelectorWindow(QtWidgets.QMainWindow):
         # Per-sample swap is remembered if previously toggled.
         self.swap = bool(self.decisions.get(ep.name, {}).get("swap", False))
         self.frame_pos = 0
+        self._load_metrics(ep)
         self._load_sim(ep)
         self.episode_badge.setText(f"#{ep.index}")
         self._position_badge()
         self._render()
         self._update_status()
+
+    def _load_metrics(self, ep: Episode):
+        """Load the same motion arrays as the sim and compute metric series."""
+        try:
+            motion = load_motion_episode(str(self.dataset.root), ep.index)
+            left, right = gripper_aperture(motion.state, motion.joint_names)
+            metrics = {
+                "velocity_variance": joint_velocity_variance(motion.state, motion.fps),
+                "jerk": jerk(motion.state, motion.fps),
+                "gripper_left": left,
+                "gripper_right": right,
+                "action_entropy": action_entropy(
+                    motion.action,
+                    window=self.entropy_window,
+                    bins=self.entropy_bins,
+                ),
+            }
+        except Exception as exc:
+            self.pane_plots.set_message(f"No metric data for\n{ep.name}:\n{exc}")
+        else:
+            self.pane_plots.set_metrics(metrics, motion.fps)
 
     def _load_sim(self, ep: Episode):
         """Point the MuJoCo replay at the same episode the cameras show."""
@@ -355,6 +551,7 @@ class SelectorWindow(QtWidgets.QMainWindow):
         self.pane_right.set_frame(right_src.frame if right_src else None)
         self.pane_left.set_title("right wrist (swapped)" if self.swap else "left wrist")
         self.pane_right.set_title("left wrist (swapped)" if self.swap else "right wrist")
+        self.pane_plots.update_playhead(self.frame_pos)
         self._render_sim()
 
     def _render_sim(self):
